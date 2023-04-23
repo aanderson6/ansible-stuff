@@ -1,0 +1,96 @@
+- hosts: windows
+  vars:
+    ansible_shell_type: powershell
+
+  tasks:
+
+    - name: Create cert directory
+      win_file:
+        path: c:\cert\ldap.domain.org
+        state: directory
+
+    - name: Create cert directory
+      win_file:
+        path: c:\cert\domain.org
+        state: directory
+
+    - name: Create cert old subdirectory
+      win_file:
+        path: c:\cert\old
+        state: directory
+
+    - name: Disable cert directory inheritance
+      win_acl_inheritance:
+        path: c:\cert
+        state: absent
+
+    - name: Add Admin Access
+      ansible.windows.win_acl:
+        path: c:\cert
+        user: Administrators
+        rights: FullControl
+        type: allow
+
+    - name: Add System Access
+      ansible.windows.win_acl:
+        path: c:\cert
+        user: SYSTEM
+        rights: FullControl
+        type: allow
+
+    - name: Distribute new cert certs
+      win_copy:
+        src: /etc/cert/live/domain.org/fullchain.pfx
+        dest: c:\cert\domain.org\fullchaintemp.pfx
+      notify:
+      - Check if old cert file exists reg
+      - Copy old cert file reg
+      - Copy new cert file reg
+      - import new cert cert reg
+      - Check if IIS is installed
+      - update LE IIS bindings
+      - delete old cert from store reg
+
+  handlers:
+
+    - name: Check if old cert file exists reg
+      win_stat:
+        path: c:\cert\domain.org\fullchain.pfx
+      register: old_cert_exists
+
+    - name: Copy old cert file reg
+      win_copy:
+        src: c:\cert\domain.org\fullchain.pfx
+        dest: c:\cert\old\fullchainreg.pfx
+        remote_src: yes
+      when: old_cert_exists.stat.exists
+
+    - name: Copy new cert file reg
+      win_copy:
+        src: c:\cert\domain.org\fullchaintemp.pfx
+        dest: c:\cert\domain.org\fullchain.pfx
+        remote_src: yes
+
+    - name: import new cert cert reg
+      ansible.windows.win_powershell:
+        script: |
+          (Import-PfxCertificate -FilePath C:\cert\domain.org\fullchain.pfx -CertStoreLocation Cert:\LocalMachine\My -Password (ConvertTo-SecureString "password" -AsPlainText -Force)).Thumbprint
+      register: regcertthumb
+
+    - name: Check if IIS is installed
+      win_service:
+        name: aW3SVC
+      register: IIS_info
+
+    - name: update LE IIS bindings
+      ansible.windows.win_powershell:
+        script: |
+          C:\Scripts\IIS-LE-Rebind.ps1
+      when: IIS_info.exists != True
+
+    - name: delete old cert from store reg
+      ansible.windows.win_certificate_store:
+        path: c:\cert\old\fullchainreg.pfx
+        state: absent
+        password: password
+      when: old_cert_exists.stat.exists

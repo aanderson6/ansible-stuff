@@ -1,0 +1,85 @@
+---
+- hosts: linux
+  become: yes
+  vars:
+    userlist:
+      - name: user1
+      - name: user2
+
+# This playbook must be run as root or sudo and should only target linux systems. Users should already exist on ansible host with their passwords and ssh keys set up.
+# If you change password or ssh key and run this playbook it will update the key and password on targets. If you add a user to the userlist it will add that user to all hosts as admin
+# and copy their password and ssh key (it copies from the 'authorized_keys' file)
+
+  tasks:
+    - name: get password
+      ansible.builtin.script:
+        cmd: "./files/get_password.sh {{ item.name }}"
+        args:
+          executable: bash
+      changed_when: False
+      delegate_to: localhost
+      loop: "{{ userlist }}"
+      register: newpass
+
+    - name: create user redhat type
+      user:
+        name: "{{ item.name }}"
+        state: present
+        password: "{{ newpass.results[myindex3].stdout_lines[0] }}"
+        groups: "wheel"
+        append: yes
+      loop: "{{ userlist }}"
+      loop_control:
+        index_var: myindex3
+      when: ansible_os_family == 'RedHat'
+
+    - name: create user debian type
+      user:
+        name: "{{ item.name }}"
+        state: present
+        password: "{{ newpass.results[myindex3].stdout_lines[0] }}"
+        groups: "sudo"
+        append: yes
+      loop: "{{ userlist }}"
+      loop_control:
+        index_var: myindex3
+      when: ansible_os_family == 'Debian'
+
+    - name: create ssh folder
+      file:
+        path: "/home/{{ item.name }}/.ssh"
+        state: directory
+      loop: "{{ userlist }}"
+      when: (item.name != "root")
+
+    - name: copy ssh keys
+      copy:
+        src: "/home/{{ item.name }}/.ssh/authorized_keys"
+        dest: "/home/{{ item.name }}/.ssh/authorized_keys"
+        mode: "0640"
+        owner: "{{ item.name }}"
+        group: "{{ item.name }}"
+      loop: "{{ userlist }}"
+      when: (item.name != "root")
+
+    - name: Ensure root login is disabled
+      ansible.builtin.lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^PermitRootLogin'
+        line: 'PermitRootLogin no'
+      notify:
+        - reload sshd
+
+    - name: Ensure password login is disabled
+      ansible.builtin.lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^PasswordAuthentication'
+        line: 'PasswordAuthentication no'
+      notify:
+        - reload sshd
+  
+  handlers:
+    - name: reload sshd
+      service:
+        name: sshd
+        state: reloaded

@@ -1,0 +1,75 @@
+- hosts: linux
+  become: yes
+  tasks:
+
+    - name: check if le directory exists
+      stat:
+        path: '/etc/cert/live/domain.org'
+      register: le_directory
+
+    - name: create le directory
+      file:
+        path: '/etc/cert/live/domain.org'
+        state: directory
+        recurse: yes
+        mode: '0750'
+        owner: "root"
+        group: "root"
+      when: not le_directory.stat.exists
+
+    - name: distribute le certs
+      copy:
+        src: "{{ item.le_file }}"
+        dest: "{{ item.le_file }}"
+        mode: "{{ item.le_perm }}"
+        owner: "root"
+        group: "root"
+      loop:
+        - { le_file: '/etc/cert/live/domain.org/cert.pem', le_perm: '0640' }
+        - { le_file: '/etc/cert/live/domain.org/chain.pem', le_perm: '0640' }
+        - { le_file: '/etc/cert/live/domain.org/combined.pem', le_perm: '0640' }
+        - { le_file: '/etc/cert/live/domain.org/fullchain.pem', le_perm: '0640' }
+        - { le_file: '/etc/cert/live/domain.org/privkey.pem', le_perm: '0640' }
+      notify:
+        - Check for httpd
+        - Reload httpd
+        - Check for prometheus
+        - reload prometheus
+        - Check for snmp-exporter
+        - reload snmp-exporter
+
+  handlers:
+
+    - name: Check for prometheus
+      stat:
+        path: /etc/systemd/system/prometheus.service
+      register: prometheus_systemd
+
+    - name: reload prometheus
+      service:
+        name: prometheus
+        state: restarted
+      when: prometheus_systemd.stat.exists
+
+    - name: Check for snmp-exporter
+      stat:
+        path: /etc/systemd/system/snmp-exporter.service
+      register: snmp_exporter_systemd
+
+    - name: reload snmp-exporter
+      service:
+        name: snmp-exporter
+        state: restarted
+      when: snmp_exporter_systemd.stat.exists
+    
+    - name: Check for httpd
+      stat:
+        path: /lib/systemd/system/httpd.service
+      register: httpd_systemd
+
+    - name: Reload httpd
+      service:
+        name: httpd
+        state: reloaded
+      when: httpd_systemd.stat.exists
+      become: yes
